@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sunray Ecosystem v2.0 - AI Feedback System</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/framer-motion@10.18.0/dist/framer-motion.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/emailjs-com@3/dist/email.min.js"></script>
+  <style>
+    body { font-family: Inter, system-ui, sans-serif; background: linear-gradient(135deg,#020617,#0f172a,#1e293b); color: #f8fafc; }
+    .glass-card { background: rgba(30, 41, 59, 0.55); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,.1); }
+    .input-field { width:100%; background:#0f172acc; border:1px solid rgba(255,255,255,.12); border-radius:12px; padding:12px 14px; color:white; }
+    .input-field:focus { outline:none; border-color:#f59e0b; box-shadow:0 0 0 3px rgba(245,158,11,.2); }
+    .btn-primary { background:linear-gradient(135deg,#f59e0b,#fbbf24); color:#fff; font-weight:600; border-radius:999px; padding:10px 20px; }
+    .btn-secondary { background:#1e293bcc; color:#fff; border:1px solid rgba(255,255,255,.15); border-radius:999px; padding:10px 20px; }
+    .badge { padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState } = React;
+    const { motion, AnimatePresence } = window.Motion;
+
+    const CONFIG = {
+      APP_NAME: 'Sunray Ecosystem',
+      ADMIN_EMAIL: '007saanjaypatil@gmail.com',
+      OPENROUTER_API_KEY: '', // set via window.__SUNRAY_CONFIG__.OPENROUTER_API_KEY for production
+      OPENROUTER_MODEL: 'meta-llama/llama-3-8b-instruct:free',
+      EMAILJS_SERVICE_ID: '',
+      EMAILJS_TEMPLATE_ID: '',
+      EMAILJS_PUBLIC_KEY: '',
+      GOOGLE_SHEETS_WEBHOOK: ''
+    };
+
+    if (window.__SUNRAY_CONFIG__) Object.assign(CONFIG, window.__SUNRAY_CONFIG__);
+    if (typeof emailjs !== 'undefined' && CONFIG.EMAILJS_PUBLIC_KEY) emailjs.init(CONFIG.EMAILJS_PUBLIC_KEY);
+
+    const FEEDBACK_CATEGORIES = [
+      { value: 'investment', label: 'Investment Experience', icon: '💰' },
+      { value: 'vendor', label: 'Vendor Program', icon: '🏪' },
+      { value: 'platform', label: 'Platform Usability', icon: '🖥️' },
+      { value: 'support', label: 'Customer Support', icon: '🎧' },
+      { value: 'other', label: 'Other', icon: '📝' }
+    ];
+
+    async function analyzeFeedbackWithAI(feedbackData) {
+      if (!CONFIG.OPENROUTER_API_KEY) {
+        return { sentiment: 'neutral', urgency: 'medium', suggestedAction: 'Configure OpenRouter key to enable AI analysis', sentimentScore: 50, requiresFollowUp: true, riskFlags: ['ai_not_configured'] };
+      }
+      const prompt = `Analyze feedback JSON and return JSON only with keys: sentiment, sentimentScore, urgency, requiresFollowUp, suggestedAction, riskFlags. Feedback: ${JSON.stringify(feedbackData)}`;
+      try {
+        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${CONFIG.OPENROUTER_API_KEY}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': window.location.origin,
+            'X-Title': 'Sunray Feedback Analysis'
+          },
+          body: JSON.stringify({ model: CONFIG.OPENROUTER_MODEL, messages: [{ role: 'user', content: prompt }], max_tokens: 300, temperature: 0.2 })
+        });
+        const data = await res.json();
+        return JSON.parse(data.choices?.[0]?.message?.content || '{}');
+      } catch (_) {
+        return { sentiment: 'neutral', urgency: 'low', suggestedAction: 'Manual review', sentimentScore: 50, requiresFollowUp: true, riskFlags: ['ai_error'] };
+      }
+    }
+
+    function Stars({ value, onChange }) {
+      return <div className="flex gap-2">{[1,2,3,4,5].map(s => <button key={s} onClick={() => onChange(s)} className={s <= value ? 'text-yellow-400 text-2xl' : 'text-slate-500 text-2xl'}>★</button>)}</div>;
+    }
+
+    function FeedbackForm({ onSubmitted }) {
+      const [step, setStep] = useState(1);
+      const [loading, setLoading] = useState(false);
+      const [errors, setErrors] = useState({});
+      const [formData, setFormData] = useState({ category:'', rating:0, comment:'', email:'', wouldRecommend:null });
+
+      const validate = () => {
+        const e = {};
+        if (!formData.category) e.category = 'Select category';
+        if (!formData.rating) e.rating = 'Select rating';
+        if ((formData.comment || '').trim().length < 20) e.comment = 'Minimum 20 characters';
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) e.email = 'Valid email required';
+        if (formData.wouldRecommend === null) e.wouldRecommend = 'Choose yes/no';
+        setErrors(e);
+        return Object.keys(e).length === 0;
+      };
+
+      const submit = async () => {
+        if (!validate()) return;
+        setLoading(true);
+        const ai = await analyzeFeedbackWithAI(formData);
+        const payload = { ...formData, ai, submittedAt: new Date().toISOString() };
+
+        if (typeof emailjs !== 'undefined' && CONFIG.EMAILJS_SERVICE_ID && CONFIG.EMAILJS_TEMPLATE_ID) {
+          await emailjs.send(CONFIG.EMAILJS_SERVICE_ID, CONFIG.EMAILJS_TEMPLATE_ID, {
+            to_email: CONFIG.ADMIN_EMAIL,
+            from_email: formData.email,
+            category: formData.category,
+            rating: formData.rating,
+            comment: formData.comment,
+            wouldRecommend: formData.wouldRecommend ? 'Yes' : 'No',
+            aiSentiment: ai.sentiment,
+            aiUrgency: ai.urgency,
+            aiAction: ai.suggestedAction,
+            submittedAt: payload.submittedAt
+          });
+        }
+
+        if (CONFIG.GOOGLE_SHEETS_WEBHOOK) {
+          await fetch(CONFIG.GOOGLE_SHEETS_WEBHOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        }
+
+        onSubmitted(payload);
+        setLoading(false);
+        setStep(1);
+        setFormData({ category:'', rating:0, comment:'', email:'', wouldRecommend:null });
+      };
+
+      return (
+        <div className="glass-card rounded-2xl p-6 max-w-2xl mx-auto">
+          <h2 className="text-2xl font-bold mb-2">Google Form style feedback</h2>
+          <p className="text-slate-300 mb-6">AI analysis + email delivery + optional Google Sheets webhook.</p>
+
+          <AnimatePresence mode="wait">
+            {step === 1 && <motion.div key="1" initial={{opacity:0,x:20}} animate={{opacity:1,x:0}} className="space-y-4">
+              <label className="block text-sm">Category</label>
+              <div className="grid grid-cols-2 gap-2">{FEEDBACK_CATEGORIES.map(c => <button key={c.value} className={`p-3 rounded-lg border ${formData.category===c.value?'border-amber-400 bg-amber-500/20':'border-white/10 bg-slate-900/40'}`} onClick={()=>setFormData({...formData,category:c.value})}>{c.icon} {c.label}</button>)}</div>
+              {errors.category && <p className="text-red-400 text-sm">{errors.category}</p>}
+              <label className="block text-sm">Rating</label>
+              <Stars value={formData.rating} onChange={rating=>setFormData({...formData,rating})}/>
+              {errors.rating && <p className="text-red-400 text-sm">{errors.rating}</p>}
+              <button className="btn-primary" onClick={()=>setStep(2)}>Next</button>
+            </motion.div>}
+
+            {step === 2 && <motion.div key="2" initial={{opacity:0,x:20}} animate={{opacity:1,x:0}} className="space-y-4">
+              <label className="block text-sm">Feedback</label>
+              <textarea className="input-field" rows="5" value={formData.comment} onChange={e=>setFormData({...formData,comment:e.target.value})} placeholder="Minimum 20 characters"/>
+              {errors.comment && <p className="text-red-400 text-sm">{errors.comment}</p>}
+              <div className="flex gap-2"><button className="btn-secondary" onClick={()=>setStep(1)}>Back</button><button className="btn-primary" onClick={()=>setStep(3)}>Next</button></div>
+            </motion.div>}
+
+            {step === 3 && <motion.div key="3" initial={{opacity:0,x:20}} animate={{opacity:1,x:0}} className="space-y-4">
+              <label className="block text-sm">Email</label>
+              <input className="input-field" type="email" value={formData.email} onChange={e=>setFormData({...formData,email:e.target.value})} />
+              {errors.email && <p className="text-red-400 text-sm">{errors.email}</p>}
+              <label className="block text-sm">Would recommend?</label>
+              <div className="flex gap-2">
+                <button className={`btn-secondary ${formData.wouldRecommend===true?'ring-2 ring-emerald-400':''}`} onClick={()=>setFormData({...formData,wouldRecommend:true})}>Yes</button>
+                <button className={`btn-secondary ${formData.wouldRecommend===false?'ring-2 ring-red-400':''}`} onClick={()=>setFormData({...formData,wouldRecommend:false})}>No</button>
+              </div>
+              {errors.wouldRecommend && <p className="text-red-400 text-sm">{errors.wouldRecommend}</p>}
+              <div className="flex gap-2"><button className="btn-secondary" onClick={()=>setStep(2)}>Back</button><button className="btn-primary" onClick={submit} disabled={loading}>{loading ? 'Submitting...' : 'Submit Feedback'}</button></div>
+            </motion.div>}
+          </AnimatePresence>
+        </div>
+      );
+    }
+
+    function App() {
+      const [feedbacks, setFeedbacks] = useState([]);
+      const [page, setPage] = useState('form');
+      return (
+        <main className="max-w-6xl mx-auto px-4 py-10">
+          <header className="flex items-center justify-between mb-8">
+            <h1 className="text-3xl font-bold">Sunray Ecosystem Feedback System</h1>
+            <div className="flex gap-2">
+              <button className="btn-secondary" onClick={()=>setPage('form')}>Form</button>
+              <button className="btn-secondary" onClick={()=>setPage('dashboard')}>Dashboard</button>
+            </div>
+          </header>
+
+          {page === 'form' && <FeedbackForm onSubmitted={(item)=>{setFeedbacks([item, ...feedbacks]); setPage('dashboard');}} />}
+          {page === 'dashboard' && (
+            <section className="space-y-4">
+              <h2 className="text-2xl font-bold">Admin Dashboard</h2>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="glass-card p-3 rounded-lg">Total: {feedbacks.length}</div>
+                <div className="glass-card p-3 rounded-lg">Positive: {feedbacks.filter(f=>f.ai?.sentiment==='positive').length}</div>
+                <div className="glass-card p-3 rounded-lg">Negative: {feedbacks.filter(f=>f.ai?.sentiment==='negative').length}</div>
+                <div className="glass-card p-3 rounded-lg">High urgency: {feedbacks.filter(f=>f.ai?.urgency==='high').length}</div>
+              </div>
+              <div className="space-y-3">
+                {feedbacks.map((f, i) => <div key={i} className="glass-card p-4 rounded-lg">
+                  <div className="flex justify-between"><strong>{f.category}</strong><span>{'★'.repeat(f.rating)}</span></div>
+                  <p className="text-slate-300 my-2">{f.comment}</p>
+                  <div className="flex gap-2 text-xs">
+                    <span className="badge" style={{background:'#334155'}}>{f.email}</span>
+                    <span className="badge" style={{background:'#7c2d12'}}>{f.ai?.sentiment || 'neutral'}</span>
+                    <span className="badge" style={{background:'#1f2937'}}>{f.ai?.urgency || 'medium'}</span>
+                  </div>
+                </div>)}
+              </div>
+            </section>
+          )}
+        </main>
+      )
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
